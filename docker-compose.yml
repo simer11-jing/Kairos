@@ -1,0 +1,176 @@
+# Kairos Docker Compose - 用户建模与主动推理系统
+
+x-common-env: &common-env
+  DB_CONNECTION_URI: postgresql+psycopg://kairos:kairos123@database:5432/kairos
+  CACHE_URL: redis://redis:6379/0?suppress=true
+  CACHE_ENABLED: "true"
+  AUTH__USE_AUTH: "false"
+
+services:
+  api:
+    build:
+      context: https://github.com/plastic-labs/honcho.git#main
+      dockerfile: Dockerfile
+    entrypoint: ["sh", "docker/entrypoint.sh"]
+    container_name: kairos-api
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - DB_CONNECTION_URI=postgresql+psycopg://kairos:kairos123@database:5432/kairos
+      - CACHE_URL=redis://redis:6379/0?suppress=true
+      - CACHE_ENABLED=true
+      - AUTH_USE_AUTH=false
+      - LLM__OPENAI_COMPATIBLE_BASE_URL=${OPENAI_COMPATIBLE_BASE_URL}
+      - LLM__OPENAI_COMPATIBLE_API_KEY=${OPENAI_COMPATIBLE_API_KEY}
+      - LLM__EMBEDDING_PROVIDER=openrouter
+      - LLM__EMBEDDING_MODEL=Pro/BAAI/bge-m3
+      # Summary 配置
+      - SUMMARY__PROVIDER=custom
+      - SUMMARY__MODEL=glm-5
+      - SUMMARY__MAX_TOKENS_SHORT=1000
+      - SUMMARY__MAX_TOKENS_LONG=4000
+      - SUMMARY__THINKING_BUDGET_TOKENS=512
+      # Deriver 配置
+      - DERIVER__ENABLED=true
+      - DERIVER__PROVIDER=custom
+      - DERIVER__MODEL=glm-5
+      - DERIVER__THINKING_BUDGET_TOKENS=1024
+      - DERIVER__MAX_OUTPUT_TOKENS=4096
+      # Dialectic 配置
+      - DIALECTIC__LEVELS__MINIMAL__PROVIDER=custom
+      - DIALECTIC__LEVELS__MINIMAL__MODEL=glm-5
+      - DIALECTIC__LEVELS__MINIMAL__THINKING_BUDGET_TOKENS=0
+      - DIALECTIC__LEVELS__MINIMAL__MAX_TOOL_ITERATIONS=1
+      - DIALECTIC__LEVELS__LOW__PROVIDER=custom
+      - DIALECTIC__LEVELS__LOW__MODEL=glm-5
+      - DIALECTIC__LEVELS__LOW__THINKING_BUDGET_TOKENS=0
+      - DIALECTIC__LEVELS__LOW__MAX_TOOL_ITERATIONS=5
+      - DIALECTIC__LEVELS__MEDIUM__PROVIDER=custom
+      - DIALECTIC__LEVELS__MEDIUM__MODEL=glm-5
+      - DIALECTIC__LEVELS__MEDIUM__THINKING_BUDGET_TOKENS=1024
+      - DIALECTIC__LEVELS__MEDIUM__MAX_TOOL_ITERATIONS=2
+      - DIALECTIC__LEVELS__HIGH__PROVIDER=custom
+      - DIALECTIC__LEVELS__HIGH__MODEL=glm-5
+      - DIALECTIC__LEVELS__HIGH__THINKING_BUDGET_TOKENS=1024
+      - DIALECTIC__LEVELS__HIGH__MAX_TOOL_ITERATIONS=4
+      - DIALECTIC__LEVELS__MAX__PROVIDER=custom
+      - DIALECTIC__LEVELS__MAX__MODEL=glm-5
+      - DIALECTIC__LEVELS__MAX__THINKING_BUDGET_TOKENS=2048
+      - DIALECTIC__LEVELS__MAX__MAX_TOOL_ITERATIONS=10
+      # Dream 配置
+      - DREAM__PROVIDER=custom
+      - DREAM__MODEL=glm-5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  deriver:
+    build:
+      context: https://github.com/plastic-labs/honcho.git#main
+      dockerfile: Dockerfile
+    entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    container_name: kairos-deriver
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DB_CONNECTION_URI=postgresql+psycopg://kairos:kairos123@database:5432/kairos
+      - CACHE_URL=redis://redis:6379/0?suppress=true
+      - CACHE_ENABLED=true
+      - AUTH__USE_AUTH=false
+      - LLM__OPENAI_COMPATIBLE_BASE_URL=${OPENAI_COMPATIBLE_BASE_URL}
+      - LLM__OPENAI_COMPATIBLE_API_KEY=${OPENAI_COMPATIBLE_API_KEY}
+      - LLM__EMBEDDING_PROVIDER=openrouter
+      - LLM__EMBEDDING_MODEL=Pro/BAAI/bge-m3
+      # Summary 配置
+      - SUMMARY__PROVIDER=custom
+      - SUMMARY__MODEL=glm-5
+      - SUMMARY__MAX_TOKENS_SHORT=1000
+      - SUMMARY__MAX_TOKENS_LONG=4000
+      - SUMMARY__THINKING_BUDGET_TOKENS=512
+      # Deriver 配置
+      - DERIVER__ENABLED=true
+      - DERIVER__PROVIDER=custom
+      - DERIVER__MODEL=glm-5
+      - DERIVER__THINKING_BUDGET_TOKENS=1024
+      - DERIVER__MAX_OUTPUT_TOKENS=4096
+      # Dialectic 配置
+      - DIALECTIC__LEVELS__MINIMAL__PROVIDER=custom
+      - DIALECTIC__LEVELS__MINIMAL__MODEL=glm-5
+      - DIALECTIC__LEVELS__MINIMAL__THINKING_BUDGET_TOKENS=0
+      - DIALECTIC__LEVELS__MINIMAL__MAX_TOOL_ITERATIONS=1
+      - DIALECTIC__LEVELS__LOW__PROVIDER=custom
+      - DIALECTIC__LEVELS__LOW__MODEL=glm-5
+      - DIALECTIC__LEVELS__LOW__THINKING_BUDGET_TOKENS=0
+      - DIALECTIC__LEVELS__LOW__MAX_TOOL_ITERATIONS=5
+      - DIALECTIC__LEVELS__MEDIUM__PROVIDER=custom
+      - DIALECTIC__LEVELS__MEDIUM__MODEL=glm-5
+      - DIALECTIC__LEVELS__MEDIUM__THINKING_BUDGET_TOKENS=1024
+      - DIALECTIC__LEVELS__MEDIUM__MAX_TOOL_ITERATIONS=2
+      - DIALECTIC__LEVELS__HIGH__PROVIDER=custom
+      - DIALECTIC__LEVELS__HIGH__MODEL=glm-5
+      - DIALECTIC__LEVELS__HIGH__THINKING_BUDGET_TOKENS=1024
+      - DIALECTIC__LEVELS__HIGH__MAX_TOOL_ITERATIONS=4
+      - DIALECTIC__LEVELS__MAX__PROVIDER=custom
+      - DIALECTIC__LEVELS__MAX__MODEL=glm-5
+      - DIALECTIC__LEVELS__MAX__THINKING_BUDGET_TOKENS=2048
+      - DIALECTIC__LEVELS__MAX__MAX_TOOL_ITERATIONS=10
+      # Dream 配置
+      - DREAM__PROVIDER=custom
+      - DREAM__MODEL=glm-5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://kairos-api:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  database:
+    image: pgvector/pgvector:pg15
+    container_name: kairos-db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      - POSTGRES_DB=kairos
+      - POSTGRES_USER=kairos
+      - POSTGRES_PASSWORD=kairos123
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - kairos-pgdata:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kairos -d kairos"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8.2
+    container_name: kairos-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - kairos-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  kairos-pgdata:
+  kairos-redis-data:
