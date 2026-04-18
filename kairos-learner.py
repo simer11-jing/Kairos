@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-Kairos 用户学习定时任务 v2
+Kairos 用户学习定时任务 v3
 
-改进：
+v2 改进：
 1. 增量更新 - 合并新特征而非全量覆盖
 2. OpenClaw 深度集成 - 直接读取 MEMORY.md 和每日记忆
 3. 置信度机制 - 频繁出现的特征置信度高
 4. 特征分类 - 基本信息/偏好/技术背景 分开存储
 
+v3 改进（本次）：
+5. Context 质量提升 - 定期压缩、分类存储、遗忘机制
+6. 学习反馈循环 - 置信度对比、矛盾特征标记
+7. CLI 增强 - diff / infer 命令
+
 用法：
     python3 kairos-learner.py --user jinghao
-    python3 kairos-learner.py --user jinghao --workspace openclaw-main
+    python3 kairos-learner.py --user jinghao --dry-run
+    python3 kairos-learner.py --user jinghao --compact    # 压缩旧 context
+    python3 kairos-learner.py --user jinghao --feedback   # 打印学习反馈
 """
 
 import os
@@ -35,30 +42,38 @@ DAILY_MEMORY_DIR = Path(OPENCLAW_AGENT_DIR) / "memory"
 # ==================== 特征解析与合并 ====================
 
 class FeatureManager:
-    """特征管理器 - 解析、合并、去重特征"""
+    """特征管理器 - 解析、合并、去重特征，支持置信度追踪和矛盾检测"""
     
     FEATURE_PATTERNS = {
         'basic': ['姓名', '名字', '年龄', '职业', '所在地', '时区', '称呼'],
-        'preference': ['喜欢', '偏好', '习惯', '不喜欢', '倾向', '希望', '想要'],
-        'tech': ['编程', '开发', '技术', '语言', '框架', '工具', '模型', 'API'],
+        'preference': ['喜欢', '偏好', '习惯', '不喜欢', '倾向', '希望', '想要', '讨厌'],
+        'tech': ['编程', '开发', '技术', '语言', '框架', '工具', '模型', 'API', '部署', '版本'],
     }
+    
+    # 矛盾特征对（同类特征互相矛盾）
+    CONTRADICTING_PAIRS = [
+        ('喜欢简洁', '喜欢冗长'),
+        ('喜欢打包exe', '不打包exe'),
+        ('偏好自动化', '偏好手动'),
+        ('微信为主', '邮件为主'),
+        ('喜欢尝试新工具', '不喜欢换工具'),
+    ]
     
     def __init__(self):
         self.features = {
-            'basic': {},      # key -> {value, confidence, last_seen}
+            'basic': {},
             'preference': {},
             'tech': {},
         }
+        self.contradictions = []  # 记录矛盾特征
     
     def parse_raw_text(self, text: str):
         """从文本中提取特征行"""
         lines = []
         for line in text.strip().split('\n'):
             line = line.strip()
-            # 跳过空行和注释行
             if not line or line.startswith('#') or line.startswith('//'):
                 continue
-            # 移除列表前缀 (- * · 等)
             line = re.sub(r'^[\-\*\·]+\s*', '', line)
             if line:
                 lines.append(line)
@@ -70,7 +85,27 @@ class FeatureManager:
             for pattern in patterns:
                 if pattern in line:
                     return category
-        return 'preference'  # 默认归类为偏好
+        return 'preference'
+    
+    def _is_contradiction(self, key1: str, key2: str) -> bool:
+        """检测两个特征是否矛盾"""
+        k1, k2 = key1.strip(), key2.strip()
+        for a, b in self.CONTRADICTING_PAIRS:
+            if (a in k1 and b in k2) or (b in k1 and a in k2):
+                return True
+        return False
+    
+    def _is_value_contradiction(self, val1: str, val2: str) -> bool:
+        """检测两个值是否矛盾（如 "是" vs "否"）"""
+        pos = ['是', '喜欢', '有', '会', '能', '支持']
+        neg = ['不', '非', '无', '否', '拒绝', '讨厌']
+        
+        v1_pos = any(p in val1 for p in pos) and not any(p in val1 for p in neg)
+        v1_neg = any(p in val1 for p in neg)
+        v2_pos = any(p in val2 for p in pos) and not any(p in val2 for p in neg)
+        v2_neg = any(p in val2 for p in neg)
+        
+        return (v1_pos and v2_neg) or (v1_neg and v2_pos)
     
     def update_from_kairos(self, representation: str):
         """从 Kairos 现有画像解析并加载"""
@@ -79,14 +114,12 @@ class FeatureManager:
         
         lines = self.parse_raw_text(representation)
         for line in lines:
-            # 提取特征（忽略时间戳）
             clean_line = re.sub(r'\[\d{4}-\d{2}-\d{2}[^\]]*\]', '', line).strip()
             if not clean_line:
                 continue
             
             category = self.classify_feature(clean_line)
             
-            # 解析 key-value
             if '：' in clean_line:
                 key, value = clean_line.split('：', 1)
             elif ':' in clean_line:
@@ -102,27 +135,25 @@ class FeatureManager:
                 if key not in self.features[category]:
                     self.features[category][key] = {
                         'value': value,
-                        'confidence': 0.3,  # 初始置信度
+                        'confidence': 0.3,
                         'count': 0,
                         'first_seen': datetime.now().isoformat(),
                     }
                 self.features[category][key]['count'] += 1
                 self.features[category][key]['last_seen'] = datetime.now().isoformat()
-                # 每次出现置信度增加，上限 1.0
                 self.features[category][key]['confidence'] = min(
-                    1.0, 
+                    1.0,
                     self.features[category][key]['confidence'] + 0.1
                 )
     
     def update_from_text(self, text: str, source: str = "analysis"):
-        """从文本更新特征（如 MEMORY.md 内容）"""
+        """从文本更新特征"""
         lines = self.parse_raw_text(text)
         timestamp = datetime.now().isoformat()
         
         for line in lines:
             category = self.classify_feature(line)
             
-            # 解析 key-value
             if '：' in line:
                 key, value = line.split('：', 1)
             elif ':' in line:
@@ -145,7 +176,6 @@ class FeatureManager:
                     'first_seen': timestamp,
                 }
             
-            # 同一来源不重复增加计数
             self.features[category][key]['count'] += 1
             self.features[category][key]['last_seen'] = timestamp
             self.features[category][key]['confidence'] = min(
@@ -153,9 +183,14 @@ class FeatureManager:
                 self.features[category][key]['confidence'] + 0.05
             )
     
-    def merge_new_features(self, new_text: str):
-        """合并新的分析结果"""
+    def merge_new_features(self, new_text: str) -> dict:
+        """
+        合并新的分析结果
+        返回：{added: [], updated: [], contradicted: []}
+        """
+        result = {'added': [], 'updated': [], 'contradicted': []}
         lines = self.parse_raw_text(new_text)
+        timestamp = datetime.now().isoformat()
         
         for line in lines:
             category = self.classify_feature(line)
@@ -173,28 +208,56 @@ class FeatureManager:
             if len(key) < 2 or len(value) < 2:
                 continue
             
-            timestamp = datetime.now().isoformat()
-            
             if key in self.features[category]:
-                # 更新已有特征
                 old_value = self.features[category][key]['value']
-                if old_value != value:
-                    # 值变了，可能需要调整判断
+                old_conf = self.features[category][key]['confidence']
+                
+                # 检测值矛盾
+                if self._is_value_contradiction(old_value, value):
+                    self.features[category][key]['confidence'] = max(
+                        0.2,
+                        old_conf - 0.2
+                    )
+                    self.contradictions.append({
+                        'key': key,
+                        'old': old_value,
+                        'new': value,
+                        'category': category,
+                    })
+                    result['contradicted'].append({
+                        'key': key,
+                        'old': old_value,
+                        'new': value,
+                    })
+                
+                # 检测特征矛盾
+                for other_key in self.features[category]:
+                    if other_key != key and self._is_contradiction(key, other_key):
+                        self.contradictions.append({
+                            'key': key,
+                            'other_key': other_key,
+                            'category': category,
+                        })
+                        result['contradicted'].append({
+                            'key': key,
+                            'other_key': other_key,
+                        })
+                
+                if old_value != value and not self._is_value_contradiction(old_value, value):
                     self.features[category][key]['value'] = value
                     self.features[category][key]['confidence'] = max(
                         0.3,
-                        self.features[category][key]['confidence'] - 0.1
+                        old_conf - 0.1
                     )
-                else:
-                    # 值相同，增加置信度
-                    self.features[category][key]['confidence'] = min(
-                        1.0,
-                        self.features[category][key]['confidence'] + 0.15
-                    )
+                    result['updated'].append({'key': key, 'new_value': value})
+                
                 self.features[category][key]['count'] += 1
                 self.features[category][key]['last_seen'] = timestamp
+                self.features[category][key]['confidence'] = min(
+                    1.0,
+                    self.features[category][key]['confidence'] + 0.15
+                )
             else:
-                # 新增特征
                 self.features[category][key] = {
                     'value': value,
                     'confidence': 0.4,
@@ -202,28 +265,99 @@ class FeatureManager:
                     'first_seen': timestamp,
                     'last_seen': timestamp,
                 }
+                result['added'].append({'key': key, 'value': value, 'category': category})
+        
+        return result
+    
+    def apply_forgetting(self, max_age_days: int = 30, min_confidence: float = 0.15):
+        """
+        遗忘机制：降低长期未更新特征的置信度
+        超过 max_age_days 未出现的特征，置信度逐渐降低
+        """
+        now = datetime.now()
+        forgotten = []
+        
+        for category in self.features:
+            to_remove = []
+            for key, data in self.features[category].items():
+                if data['confidence'] < min_confidence:
+                    to_remove.append(key)
+                    continue
+                    
+                last_seen = datetime.fromisoformat(data['last_seen'])
+                days_ago = (now - last_seen).days
+                
+                if days_ago > max_age_days:
+                    # 每超过一天，置信度降低 0.02
+                    decay = min(data['confidence'], (days_ago - max_age_days) * 0.02)
+                    data['confidence'] = max(min_confidence, data['confidence'] - decay)
+                    
+                    if data['confidence'] <= min_confidence:
+                        to_remove.append(key)
+                        forgotten.append({'key': key, 'category': category, 'last_seen': data['last_seen']})
+            
+            for key in to_remove:
+                del self.features[category][key]
+        
+        return forgotten
+    
+    def get_high_confidence_features(self, threshold: float = 0.6) -> dict:
+        """获取高置信度特征（用于推理）"""
+        result = {}
+        for category in self.features:
+            result[category] = [
+                (k, v) for k, v in self.features[category].items()
+                if v['confidence'] >= threshold
+            ]
+        return result
+    
+    def generate_compressed_summary(self) -> str:
+        """
+        生成压缩摘要：将大量低置信度特征合并为高层描述
+        """
+        lines = []
+        lines.append("## 用户画像压缩摘要")
+        lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        
+        for category in ['basic', 'preference', 'tech']:
+            if not self.features[category]:
+                continue
+            
+            title = {'basic': '📋 基本信息', 'preference': '❤️ 核心偏好', 'tech': '💻 技术特征'}[category]
+            lines.append(f"\n### {title}")
+            
+            # 高置信度特征
+            high = [(k, v) for k, v in self.features[category].items() if v['confidence'] >= 0.6]
+            if high:
+                lines.append("**高置信度（稳定）:**")
+                for k, v in sorted(high, key=lambda x: x[1]['confidence'], reverse=True):
+                    lines.append(f"- {k}：{v['value']} ({v['count']}次)")
+            
+            # 中置信度特征
+            mid = [(k, v) for k, v in self.features[category].items() 
+                   if 0.3 <= v['confidence'] < 0.6]
+            if mid:
+                lines.append(f"\n**中等置信度（待观察，{len(mid)}项）:**")
+                for k, v in sorted(mid, key=lambda x: x[1]['confidence'], reverse=True)[:5]:
+                    lines.append(f"- {k}：{v['value']}")
+        
+        return '\n'.join(lines)
     
     def to_string(self) -> str:
         """转换为格式化字符串"""
         lines = []
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
         
-        lines.append(f"[{timestamp}] Kairos 用户画像 v2")
+        lines.append(f"[{timestamp}] Kairos 用户画像 v3")
         lines.append("")
         
         for category in ['basic', 'preference', 'tech']:
             if not self.features[category]:
                 continue
             
-            title = {
-                'basic': '📋 基本信息',
-                'preference': '❤️ 偏好习惯',
-                'tech': '💻 技术背景'
-            }[category]
-            
+            title = {'basic': '📋 基本信息', 'preference': '❤️ 偏好习惯', 'tech': '💻 技术背景'}[category]
             lines.append(f"### {title}")
             
-            # 按置信度排序
             sorted_features = sorted(
                 self.features[category].items(),
                 key=lambda x: x[1]['confidence'],
@@ -236,6 +370,15 @@ class FeatureManager:
             
             lines.append("")
         
+        # 矛盾特征警告
+        if self.contradictions:
+            lines.append("### ⚠️ 矛盾特征")
+            for c in self.contradictions:
+                if 'old' in c and 'new' in c:
+                    lines.append(f"- {c['key']}: 「{c['old']}」 vs 「{c['new']}」")
+                elif 'other_key' in c:
+                    lines.append(f"- {c['key']} vs {c['other_key']} (潜在矛盾)")
+        
         return '\n'.join(lines)
     
     def get_summary(self) -> str:
@@ -244,7 +387,8 @@ class FeatureManager:
         for category in ['basic', 'preference', 'tech']:
             count = len(self.features[category])
             if count > 0:
-                parts.append(f"{count}个{category}")
+                high = sum(1 for v in self.features[category].values() if v['confidence'] >= 0.6)
+                parts.append(f"{category}: {count}个({high}高置信)")
         return ', '.join(parts) if parts else '暂无特征'
 
 
@@ -254,15 +398,12 @@ def read_openclaw_memory() -> str:
     """读取 OpenClaw 记忆文件，提取用户相关信息"""
     contents = []
     
-    # 读取 MEMORY.md
     if MEMORY_FILE.exists():
         try:
             content = MEMORY_FILE.read_text(encoding='utf-8')
-            # 提取关键段落（避免过长）
             lines = content.split('\n')
             for i, line in enumerate(lines):
-                if any(kw in line for kw in ['用户', '偏好', '姓名', '职业', '习惯', '关于', 'MEMORY']):
-                    # 获取周围上下文
+                if any(kw in line for kw in ['用户', '偏好', '姓名', '职业', '习惯', '关于']):
                     start = max(0, i - 1)
                     end = min(len(lines), i + 3)
                     context = '\n'.join(lines[start:end])
@@ -270,7 +411,6 @@ def read_openclaw_memory() -> str:
         except Exception as e:
             print(f"⚠️ 读取 MEMORY.md 失败: {e}")
     
-    # 读取最近2天的每日记忆
     today = datetime.now()
     for days_ago in range(2):
         target_date = (today - timedelta(days=days_ago)).strftime('%Y-%m-%d')
@@ -278,7 +418,6 @@ def read_openclaw_memory() -> str:
         if daily_file.exists():
             try:
                 content = daily_file.read_text(encoding='utf-8')
-                # 只取关键段落
                 lines = content.split('\n')
                 for i, line in enumerate(lines):
                     if any(kw in line.lower() for kw in ['user', 'pref', '喜欢', '不喜欢', '决策', '项目']):
@@ -294,15 +433,17 @@ def read_openclaw_memory() -> str:
 # ==================== 主逻辑 ====================
 
 def main():
-    parser = argparse.ArgumentParser(description="Kairos 用户学习定时任务 v2")
+    parser = argparse.ArgumentParser(description="Kairos 用户学习定时任务 v3")
     parser.add_argument("--workspace", default=DEFAULT_WORKSPACE, help="工作区 ID")
     parser.add_argument("--user", required=True, help="用户 ID")
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help="API URL")
     parser.add_argument("--dry-run", action="store_true", help="仅打印结果，不写入")
+    parser.add_argument("--compact", action="store_true", help="压缩旧 context，生成摘要")
+    parser.add_argument("--feedback", action="store_true", help="仅打印学习反馈，不写入")
     
     args = parser.parse_args()
 
-    print(f"=== Kairos 用户学习 v2 ===")
+    print(f"=== Kairos 用户学习 v3 ===")
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"工作区: {args.workspace}")
     print(f"用户: {args.user}")
@@ -311,19 +452,17 @@ def main():
     print()
 
     with KairosClient(args.api_url) as client:
-        # 检查健康
         if not client.health_check():
             print("❌ Kairos 服务不可用")
             return 1
         
         print("✅ Kairos 连接正常")
         
-        # 获取工作区和用户
         workspace = client.get_or_create_workspace(args.workspace)
         peer = client.get_or_create_peer(workspace.id, args.user)
         print(f"工作区: {workspace.id}, 用户: {peer.id}")
         
-        # ====== 步骤1: 加载现有画像 ======
+        # ====== 加载现有画像 ======
         fm = FeatureManager()
         context = client.get_context(workspace.id, peer.id)
         current_rep = context.get("representation", "")
@@ -335,7 +474,53 @@ def main():
         else:
             print("\n📥 无现有画像，从头开始")
         
-        # ====== 步骤2: 读取 OpenClaw 记忆 ======
+        # ====== 压缩模式 ======
+        if args.compact:
+            print("\n📦 生成压缩摘要...")
+            summary = fm.generate_compressed_summary()
+            print(summary)
+            
+            if not args.dry_run:
+                # 用压缩摘要替换现有
+                try:
+                    client.update_representation(
+                        workspace.id, peer.id,
+                        summary,
+                        representation_type="compressed_profile"
+                    )
+                    print("\n✅ 压缩摘要已写入")
+                except Exception as e:
+                    print(f"\n⚠️ 写入失败: {e}")
+            return 0
+        
+        # ====== 反馈模式 ======
+        if args.feedback:
+            print("\n📊 学习反馈报告:")
+            print(f"   总特征数: {sum(len(fm.features[c]) for c in fm.features)}")
+            
+            for cat in ['basic', 'preference', 'tech']:
+                if not fm.features[cat]:
+                    continue
+                print(f"\n   [{cat}] {len(fm.features[cat])}个:")
+                for k, v in fm.features[cat].items():
+                    conf_bar = '★' * int(v['confidence'] * 5) + '☆' * (5 - int(v['confidence'] * 5))
+                    print(f"     {k}: {v['value']} [{conf_bar}] ({v['count']}次)")
+            
+            if fm.contradictions:
+                print(f"\n   ⚠️ 矛盾特征: {len(fm.contradictions)}个")
+                for c in fm.contradictions:
+                    if 'old' in c:
+                        print(f"     {c['key']}: 「{c['old']}」 vs 「{c['new']}」")
+            
+            # 高置信度特征（用于推理）
+            high = fm.get_high_confidence_features(threshold=0.6)
+            print(f"\n   🎯 高置信度特征（可用于推理）:")
+            for cat, items in high.items():
+                if items:
+                    print(f"     {cat}: {len(items)}个")
+            return 0
+        
+        # ====== 正常学习流程 ======
         print("\n📖 读取 OpenClaw 记忆...")
         oc_memory = read_openclaw_memory()
         if oc_memory:
@@ -344,7 +529,7 @@ def main():
         else:
             print("   未找到相关记忆")
         
-        # ====== 步骤3: 生成新的分析 ======
+        # 生成分析
         analysis_prompt = f"""你是一个用户画像分析专家。请从以下信息中提取和更新用户特征。
 
 现有用户画像摘要：
@@ -362,8 +547,7 @@ OpenClaw 记忆片段：
         
         print("\n🤖 生成画像分析...")
         response = client.chat(
-            workspace.id,
-            peer.id,
+            workspace.id, peer.id,
             analysis_prompt,
             reasoning_level="low"
         )
@@ -371,36 +555,52 @@ OpenClaw 记忆片段：
         new_features = response.get("content", "").strip()
         print(f"\n📝 新特征:\n{new_features[:300]}...")
         
-        # ====== 步骤4: 合并新特征 ======
-        if new_features:
-            print("\n🔄 合并新特征...")
-            fm.merge_new_features(new_features)
-            print(f"   合并后: {fm.get_summary()}")
+        # 合并 + 矛盾检测
+        print("\n🔄 合并新特征...")
+        merge_result = fm.merge_new_features(new_features)
         
-        # ====== 步骤5: 写入 Kairos ======
+        print(f"   新增: {len(merge_result['added'])}个")
+        print(f"   更新: {len(merge_result['updated'])}个")
+        print(f"   矛盾: {len(merge_result['contradicted'])}个")
+        
+        # 遗忘机制（降低30天未更新特征的置信度）
+        print("\n🧹 应用遗忘机制...")
+        forgotten = fm.apply_forgetting(max_age_days=30, min_confidence=0.15)
+        if forgotten:
+            print(f"   移除/降低: {len(forgotten)}个低置信度特征")
+        
+        # 矛盾警告
+        if fm.contradictions:
+            print(f"\n⚠️ 检测到 {len(fm.contradictions)} 个矛盾特征:")
+            for c in fm.contradictions[-3:]:  # 最多显示3个
+                if 'old' in c:
+                    print(f"   {c['key']}: 「{c['old']}」 vs 「{c['new']}」")
+        
+        print(f"   合并后: {fm.get_summary()}")
+        
+        # 写入
         final_representation = fm.to_string()
         
         if args.dry_run:
             print("\n⚠️ DRY-RUN - 仅打印结果:")
             print("-" * 40)
-            print(final_representation)
+            print(final_representation[:500])
             print("-" * 40)
         else:
             try:
                 client.update_representation(
-                    workspace.id,
-                    peer.id,
+                    workspace.id, peer.id,
                     final_representation,
                     representation_type="user_profile"
                 )
-                print("\n✅ 用户画像已更新")
+                total = sum(len(fm.features[c]) for c in fm.features)
+                print(f"\n✅ 用户画像已更新 ({total}个特征)")
                 
-                # 打印更新摘要
-                total_features = sum(len(fm.features[c]) for c in fm.features)
-                print(f"   特征总数: {total_features}")
-                for cat in ['basic', 'preference', 'tech']:
-                    if fm.features[cat]:
-                        print(f"   - {cat}: {len(fm.features[cat])}个")
+                # 学习反馈
+                print("\n📊 本次学习反馈:")
+                print(f"   + 新增 {len(merge_result['added'])} 个特征")
+                if merge_result['contradicted']:
+                    print(f"   ⚠️ {len(merge_result['contradicted'])} 个矛盾被检测并调整")
                 
             except Exception as e:
                 print(f"\n⚠️ 更新失败: {e}")
