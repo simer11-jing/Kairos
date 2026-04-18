@@ -1,79 +1,154 @@
-# Kairos OpenClaw 集成状态
+# Kairos OpenClaw 集成
 
-## ✅ 已完成
+基于 Honcho 的用户建模与主动推理系统，为 OpenClaw 提供用户画像和记忆增强能力。
 
-### 1. 本地部署
-- Docker 服务正常运行
-- API: http://localhost:8000
-- 健康检查通过
+## 部署状态
 
-### 2. LLM 配置
-- 提供商: dayoukewei
-- 模型: glm-5
-- Base URL: https://ai.dayoukewei.net/v1
+| 组件 | 状态 |
+|------|------|
+| API (http://localhost:8000) | ✅ 运行中 |
+| Deriver | ✅ 运行中 |
+| Redis | ✅ 运行中 |
+| PostgreSQL | ✅ 运行中 |
 
-### 3. 可用功能
+## 模型配置
+
+- **提供商**: SiliconFlow
+- **模型**: Qwen/Qwen2.5-7B-Instruct
+- **用途**: 用户画像分析、对话推理、记忆总结
+
+## 核心功能
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| Chat 对话 | ✅ 正常 | 核心功能 |
-| 记录用户信息 | ✅ 正常 | update_representation |
-| 获取上下文 | ✅ 正常 | get_context |
-| 自动学习（定时任务） | ✅ 正常 | 每小时运行 |
-| 搜索 | ❌ Bug | Kairos 内部 token 计算问题 |
+| Chat 对话 | ✅ | 核心对话能力 |
+| 用户画像 | ✅ | 双端建模（User Peer + AI Peer） |
+| 上下文记忆 | ✅ | 自动累积用户偏好 |
+| 自动学习 | ✅ | 每小时增量更新画像 |
+| 搜索 | ✅ | 基于上下文的用户信息检索 |
 
-### 4. 文件位置
+## 文件结构
 
-| 文件 | 说明 |
-|------|------|
-| `~/.openclaw/kairos/docker-compose.yml` | Docker 配置 |
-| `~/.openclaw/kairos/.env` | 环境变量 |
-| `~/.openclaw/skills/honcho/client.py` | Python 客户端 |
-| `~/.openclaw/skills/honcho/kairos-cli.py` | CLI 工具 |
-| `~/.openclaw/skills/honcho/kairos-learner.py` | 学习定时任务脚本 |
+```
+~/.openclaw/skills/kairos/
+├── kairos-learner.py   # v2 增量学习脚本（推荐）
+├── kairos-cli.py       # CLI 工具（含 append 模式）
+├── client.py           # Kairos API Python 客户端
+├── SKILL.md            # Skill 定义
+└── README.md           # 本文件
 
-## 📝 使用方法
+~/.openclaw/kairos/     # Docker 部署目录
+├── docker-compose.yml  # 容器编排
+├── .env                # 环境变量（勿提交）
+└── data/               # 数据卷
+```
+
+## 快速开始
+
+### 启动服务
+
+```bash
+cd ~/.openclaw/kairos
+docker compose up -d
+```
+
+### 健康检查
+
+```bash
+curl http://localhost:8000/health
+```
+
+### CLI 使用
+
+```bash
+# 健康检查
+python3 ~/.openclaw/skills/kairos/kairos-cli.py health
+
+# 发送消息
+python3 ~/.openclaw/skills/kairos/kairos-cli.py chat "你好" --user jinghao
+
+# 获取上下文
+python3 ~/.openclaw/skills/kairos/kairos-cli.py context --user jinghao
+
+# 搜索用户信息
+python3 ~/.openclaw/skills/kairos/kairos-cli.py search "偏好" --user jinghao
+
+# 更新用户知识（全量模式）
+python3 ~/.openclaw/skills/kairos/kairos-cli.py update "用户偏好：简洁回复" --type preference
+
+# 更新用户知识（追加模式）
+python3 ~/.openclaw/skills/kairos/kairos-cli.py update "新增偏好：喜欢尝试新工具" -a
+```
 
 ### Python API
 
 ```python
+import sys
+sys.path.insert(0, '~/.openclaw/skills/kairos')
 from client import KairosClient
 
 with KairosClient() as client:
     workspace = client.get_or_create_workspace("openclaw-main")
     peer = client.get_or_create_peer(workspace.id, "jinghao")
-    
+
     # Chat 对话
     response = client.chat(workspace.id, peer.id, "你好")
-    
+
+    # 获取上下文
+    context = client.get_context(workspace.id, peer.id)
+
     # 更新用户知识
     client.update_representation(
         workspace.id, peer.id,
         "用户偏好：简洁回复",
         representation_type="preference"
     )
-    
-    # 获取上下文
-    context = client.get_context(workspace.id, peer.id)
 ```
 
-### CLI
+## Kairos Learner v2
+
+增量用户学习脚本，对比旧版的核心改进：
+
+### 改进项
+
+| 改进 | 说明 |
+|------|------|
+| **增量更新** | 合并新特征，而非全量覆盖历史数据 |
+| **置信度机制** | 特征出现越多置信度越高（★评级） |
+| **特征分类** | 基本信息 / 偏好习惯 / 技术背景 分开存储 |
+| **OpenClaw 集成** | 深度读取 MEMORY.md + 每日记忆 |
+| **去重合并** | 自动识别并合并重复特征 |
+
+### 使用方法
 
 ```bash
-# 健康检查
-python3 ~/.openclaw/skills/honcho/kairos-cli.py health
+# 增量学习（写入数据）
+python3 ~/.openclaw/skills/kairos/kairos-learner.py --user jinghao
 
-# 发送消息
-python3 ~/.openclaw/skills/honcho/kairos-cli.py chat "你好" --user jinghao
-
-# 获取上下文
-python3 ~/.openclaw/skills/honcho/kairos-cli.py context --user jinghao
-
-# 记录用户信息
-python3 ~/.openclaw/skills/honcho/kairos-cli.py update "用户偏好：简洁回复" --type preference
+# 测试模式（仅打印，不写入）
+python3 ~/.openclaw/skills/kairos/kairos-learner.py --user jinghao --dry-run
 ```
 
-## 🔧 服务管理
+### 输出示例
+
+```
+=== Kairos 用户学习 v2 ===
+时间: 2026-04-19 03:25
+✅ Kairos 连接正常
+
+📥 加载现有画像: 27个特征
+📖 读取 OpenClaw 记忆: 4210字符
+🤖 生成画像分析...
+🔄 合并新特征...
+
+✅ 用户画像已更新
+   特征总数: 31
+   - basic: 2个
+   - preference: 27个
+   - tech: 2个
+```
+
+## 服务管理
 
 ```bash
 # 启动
@@ -82,42 +157,29 @@ cd ~/.openclaw/kairos && docker compose up -d
 # 停止
 cd ~/.openclaw/kairos && docker compose down
 
+# 重启
+cd ~/.openclaw/kairos && docker compose restart
+
+# 查看日志
+docker logs kairos-api --tail 50
+
 # 查看状态
 docker ps --format "table {{.Names}}\t{{.Status}}"
-
-# 健康检查
-curl http://localhost:8000/health
 ```
 
-## 🚀 下一步
+## 常见问题
 
-1. 集成到 OpenClaw 主进程（注册为工具）
-2. 等待 Kairos 更新修复搜索 bug
+**Q: chat 返回 500 错误？**
+A: 检查模型是否可用。查看日志：`docker logs kairos-api --tail 30`。通常是 API Key 或模型名称配置错误。
 
-## 🤖 自动学习定时任务
+**Q: 特征出现噪音？**
+A: 当前版本会读取 MEMORY.md 的结构化内容，部分系统标签可能被识别为特征。后续版本会优化过滤规则。
 
-已配置 OpenClaw cron 定时任务，每小时运行一次。
+## 更新日志
 
-**任务详情：**
-- 名称: kairos-learner
-- 频率: 每小时（0 * * * *）
-- 时区: Asia/Shanghai
-
-**管理命令：**
-
-```bash
-# 查看任务
-openclaw cron list | grep kairos-learner
-
-# 手动运行
-openclaw cron run <job-id>
-
-# 查看状态
-openclaw cron status
-```
-
-**手动测试：**
-
-```bash
-python3 ~/.openclaw/skills/honcho/kairos-learner.py --user jinghao
-```
+### v2 (2026-04-19)
+- 增量更新替代全量覆盖
+- 置信度 + 特征分类机制
+- 深度集成 OpenClaw MEMORY.md
+- CLI 支持 `--append` 追加模式
+- 模型从 glm-5 切换为 Qwen/Qwen2.5-7B-Instruct
