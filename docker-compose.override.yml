@@ -2,17 +2,18 @@ services:
   api:
     environment:
       - LLM__EMBEDDING_PROVIDER=openrouter
-      - LLM__EMBEDDING_MODEL=Pro/BAAI/bge-m3
+      - LLM__EMBEDDING_MODEL=BAAI/bge-m3
       - VECTOR_STORE__DIMENSIONS=1024
     volumes:
       - ./patches:/app/patches:ro
-    entrypoint: ["sh", "-c", "cp /app/patches/*.py /app/src/routers/ 2>/dev/null; cp /app/patches/*.py /app/src/schemas/ 2>/dev/null; sh /app/docker/entrypoint.sh"]
+      - ./startup-patch.sh:/scripts/startup-patch.sh:ro
+    entrypoint: ["/bin/sh", "-c", "cp /app/patches/peers.py /app/src/routers/peers.py; cp /app/patches/schemas_api.py /app/src/schemas/api.py; cp /app/patches/schemas_init.py /app/src/schemas/__init__.py; /bin/sh /scripts/startup-patch.sh"]
 
   deriver:
     environment:
       - LLM__EMBEDDING_PROVIDER=openrouter
-      - LLM__EMBEDDING_MODEL=Pro/BAAI/bge-m3
+      - LLM__EMBEDDING_MODEL=BAAI/bge-m3
       - VECTOR_STORE__DIMENSIONS=1024
     volumes:
       - ./patches:/app/patches:ro
-    entrypoint: ["/bin/sh", "-c", "cp /app/patches/*.py /app/src/routers/ 2>/dev/null; cp /app/patches/*.py /app/src/schemas/ 2>/dev/null; /app/.venv/bin/python -m src.deriver"]
+    entrypoint: ["/bin/sh", "-c", "cp /app/patches/peers.py /app/src/routers/peers.py; cp /app/patches/schemas_api.py /app/src/schemas/api.py; cp /app/patches/schemas_init.py /app/src/schemas/__init__.py; /app/.venv/bin/python -m src.deriver"]

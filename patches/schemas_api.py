@@ -536,12 +536,6 @@ class MessageSearchOptions(BaseModel):
         le=100,
         description="Number of results to return",
     )
-    threshold: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="Maximum cosine distance threshold for results",
-    )
 
     @field_validator("query", mode="after")
     @classmethod
@@ -700,10 +694,12 @@ class WebhookEndpoint(WebhookEndpointBase):
     url: str
     created_at: datetime.datetime
 
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)  # pyright: ignore
 
-# =============================================================================
-# Tiered Representation Schemas
-# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Tiered Representation Schemas (Patch Addition)
+# ---------------------------------------------------------------------------
 
 class TieredRepresentationGet(BaseModel):
     """Options for getting a tiered peer representation."""

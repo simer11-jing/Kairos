@@ -11,7 +11,9 @@ services:
     build:
       context: https://github.com/plastic-labs/honcho.git#main
       dockerfile: Dockerfile
-    entrypoint: ["sh", "docker/entrypoint.sh"]
+    entrypoint: ["/bin/sh", "/scripts/startup-patch.sh"]
+    volumes:
+      - ./startup-patch.sh:/scripts/startup-patch.sh:ro
     container_name: kairos-api
     depends_on:
       database:
@@ -27,44 +29,44 @@ services:
       - AUTH_USE_AUTH=false
       - LLM__OPENAI_COMPATIBLE_BASE_URL=${OPENAI_COMPATIBLE_BASE_URL}
       - LLM__OPENAI_COMPATIBLE_API_KEY=${OPENAI_COMPATIBLE_API_KEY}
-      - LLM__EMBEDDING_PROVIDER=openrouter
-      - LLM__EMBEDDING_MODEL=Pro/BAAI/bge-m3
+      - LLM__EMBEDDING_PROVIDER=siliconflow
+      - LLM__EMBEDDING_MODEL=BAAI/bge-m3
       # Summary 配置
       - SUMMARY__PROVIDER=custom
-      - SUMMARY__MODEL=glm-5
+      - SUMMARY__MODEL=Qwen/Qwen2.5-7B-Instruct
       - SUMMARY__MAX_TOKENS_SHORT=1000
       - SUMMARY__MAX_TOKENS_LONG=4000
       - SUMMARY__THINKING_BUDGET_TOKENS=512
       # Deriver 配置
       - DERIVER__ENABLED=true
       - DERIVER__PROVIDER=custom
-      - DERIVER__MODEL=glm-5
+      - DERIVER__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DERIVER__THINKING_BUDGET_TOKENS=1024
       - DERIVER__MAX_OUTPUT_TOKENS=4096
       # Dialectic 配置
       - DIALECTIC__LEVELS__MINIMAL__PROVIDER=custom
-      - DIALECTIC__LEVELS__MINIMAL__MODEL=glm-5
+      - DIALECTIC__LEVELS__MINIMAL__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__MINIMAL__THINKING_BUDGET_TOKENS=0
       - DIALECTIC__LEVELS__MINIMAL__MAX_TOOL_ITERATIONS=1
       - DIALECTIC__LEVELS__LOW__PROVIDER=custom
-      - DIALECTIC__LEVELS__LOW__MODEL=glm-5
+      - DIALECTIC__LEVELS__LOW__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__LOW__THINKING_BUDGET_TOKENS=0
       - DIALECTIC__LEVELS__LOW__MAX_TOOL_ITERATIONS=5
       - DIALECTIC__LEVELS__MEDIUM__PROVIDER=custom
-      - DIALECTIC__LEVELS__MEDIUM__MODEL=glm-5
+      - DIALECTIC__LEVELS__MEDIUM__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__MEDIUM__THINKING_BUDGET_TOKENS=1024
       - DIALECTIC__LEVELS__MEDIUM__MAX_TOOL_ITERATIONS=2
       - DIALECTIC__LEVELS__HIGH__PROVIDER=custom
-      - DIALECTIC__LEVELS__HIGH__MODEL=glm-5
+      - DIALECTIC__LEVELS__HIGH__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__HIGH__THINKING_BUDGET_TOKENS=1024
       - DIALECTIC__LEVELS__HIGH__MAX_TOOL_ITERATIONS=4
       - DIALECTIC__LEVELS__MAX__PROVIDER=custom
-      - DIALECTIC__LEVELS__MAX__MODEL=glm-5
+      - DIALECTIC__LEVELS__MAX__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__MAX__THINKING_BUDGET_TOKENS=2048
       - DIALECTIC__LEVELS__MAX__MAX_TOOL_ITERATIONS=10
       # Dream 配置
       - DREAM__PROVIDER=custom
-      - DREAM__MODEL=glm-5
+      - DREAM__MODEL=Qwen/Qwen2.5-7B-Instruct
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
@@ -91,44 +93,44 @@ services:
       - AUTH__USE_AUTH=false
       - LLM__OPENAI_COMPATIBLE_BASE_URL=${OPENAI_COMPATIBLE_BASE_URL}
       - LLM__OPENAI_COMPATIBLE_API_KEY=${OPENAI_COMPATIBLE_API_KEY}
-      - LLM__EMBEDDING_PROVIDER=openrouter
-      - LLM__EMBEDDING_MODEL=Pro/BAAI/bge-m3
+      - LLM__EMBEDDING_PROVIDER=siliconflow
+      - LLM__EMBEDDING_MODEL=BAAI/bge-m3
       # Summary 配置
       - SUMMARY__PROVIDER=custom
-      - SUMMARY__MODEL=glm-5
+      - SUMMARY__MODEL=Qwen/Qwen2.5-7B-Instruct
       - SUMMARY__MAX_TOKENS_SHORT=1000
       - SUMMARY__MAX_TOKENS_LONG=4000
       - SUMMARY__THINKING_BUDGET_TOKENS=512
       # Deriver 配置
       - DERIVER__ENABLED=true
       - DERIVER__PROVIDER=custom
-      - DERIVER__MODEL=glm-5
+      - DERIVER__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DERIVER__THINKING_BUDGET_TOKENS=1024
       - DERIVER__MAX_OUTPUT_TOKENS=4096
       # Dialectic 配置
       - DIALECTIC__LEVELS__MINIMAL__PROVIDER=custom
-      - DIALECTIC__LEVELS__MINIMAL__MODEL=glm-5
+      - DIALECTIC__LEVELS__MINIMAL__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__MINIMAL__THINKING_BUDGET_TOKENS=0
       - DIALECTIC__LEVELS__MINIMAL__MAX_TOOL_ITERATIONS=1
       - DIALECTIC__LEVELS__LOW__PROVIDER=custom
-      - DIALECTIC__LEVELS__LOW__MODEL=glm-5
+      - DIALECTIC__LEVELS__LOW__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__LOW__THINKING_BUDGET_TOKENS=0
       - DIALECTIC__LEVELS__LOW__MAX_TOOL_ITERATIONS=5
       - DIALECTIC__LEVELS__MEDIUM__PROVIDER=custom
-      - DIALECTIC__LEVELS__MEDIUM__MODEL=glm-5
+      - DIALECTIC__LEVELS__MEDIUM__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__MEDIUM__THINKING_BUDGET_TOKENS=1024
       - DIALECTIC__LEVELS__MEDIUM__MAX_TOOL_ITERATIONS=2
       - DIALECTIC__LEVELS__HIGH__PROVIDER=custom
-      - DIALECTIC__LEVELS__HIGH__MODEL=glm-5
+      - DIALECTIC__LEVELS__HIGH__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__HIGH__THINKING_BUDGET_TOKENS=1024
       - DIALECTIC__LEVELS__HIGH__MAX_TOOL_ITERATIONS=4
       - DIALECTIC__LEVELS__MAX__PROVIDER=custom
-      - DIALECTIC__LEVELS__MAX__MODEL=glm-5
+      - DIALECTIC__LEVELS__MAX__MODEL=Qwen/Qwen2.5-7B-Instruct
       - DIALECTIC__LEVELS__MAX__THINKING_BUDGET_TOKENS=2048
       - DIALECTIC__LEVELS__MAX__MAX_TOOL_ITERATIONS=10
       # Dream 配置
       - DREAM__PROVIDER=custom
-      - DREAM__MODEL=glm-5
+      - DREAM__MODEL=Qwen/Qwen2.5-7B-Instruct
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://kairos-api:8000/health')\""]
