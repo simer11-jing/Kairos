@@ -1,0 +1,114 @@
+{
+  "name": "kairos",
+  "description": "Kairos 用户建模系统 - 提供用户记忆、建模和推理能力",
+  "tools": [
+    {
+      "name": "kairos_chat",
+      "description": "与 Kairos 用户建模系统对话，发送消息并获取 AI 回复。用于：用户偏好学习、个性化回复、用户画像构建",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "要发送的消息内容"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "用户标识符（默认使用当前对话用户）"
+          },
+          "session_id": {
+            "type": "string",
+            "description": "会话 ID（可选，用于多轮对话）"
+          }
+        },
+        "required": ["message"]
+      }
+    },
+    {
+      "name": "kairos_get_context",
+      "description": "获取用户的上下文信息，包括历史对话、偏好、结论等。用于：了解用户特点、个性化服务、记忆检索",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "用户标识符"
+          },
+          "query": {
+            "type": "string",
+            "description": "查询关键词（可选）"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "kairos_search",
+      "description": "搜索用户相关信息。用于：查找用户说过的话、用户偏好、历史记录",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "搜索查询"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "用户标识符（可选，不指定则搜索所有用户）"
+          },
+          "top_k": {
+            "type": "integer",
+            "description": "返回结果数量（默认 5）",
+            "default": 5
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "kairos_update_representation",
+      "description": "更新用户知识表示。用于：记录重要信息、用户偏好、学习成果",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "要记录的内容"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "用户标识符"
+          },
+          "representation_type": {
+            "type": "string",
+            "description": "知识类型（如：preference, fact, skill）"
+          }
+        },
+        "required": ["content"]
+      }
+    }
+  ],
+  "config": {
+    "api_url": "http://localhost:8000",
+    "workspace": "openclaw",
+    "timeout": 30
+  },
+  "examples": [
+    {
+      "user": "记住我喜欢简洁的回复",
+      "tool": "kairos_update_representation",
+      "params": {
+        "content": "用户偏好：喜欢简洁的回复风格",
+        "representation_type": "preference"
+      }
+    },
+    {
+      "user": "我之前说过什么关于开发的偏好？",
+      "tool": "kairos_search",
+      "params": {
+        "query": "开发偏好",
+        "top_k": 5
+      }
+    }
+  ]
+}
