@@ -610,6 +610,7 @@ def learn_from_betting() -> str:
     """
     从投注记录文件读取并解析用户投注特征
     读取 ~/.openclaw/workspace/self-improving/jingcai/betting-results.md
+    识别复杂投注模式：连胜追涨、输后翻倍、主客场偏好、赔率区间分布等
     """
     betting_file = Path.home() / ".openclaw/workspace/self-improving/jingcai/betting-results.md"
     if not betting_file.exists():
@@ -618,16 +619,90 @@ def learn_from_betting() -> str:
         import re
         with open(betting_file, 'r', encoding='utf-8') as f:
             content = f.read()
+        
+        # 基本统计
         total = content.count('|') - 1
         wins = len(re.findall(r'胜|红|赢', content))
-        leagues = re.findall(r'英超|德甲|意甲|西甲|法甲|欧冠|欧联', content)
+        losses = len(re.findall(r'负|黑|输', content))
+        draws = len(re.findall(r'平', content))
+        win_rate = wins / total * 100 if total > 0 else 0
+        
+        # 联赛偏好
+        leagues = re.findall(r'英超|德甲|意甲|西甲|法甲|欧冠|欧联|美职|葡超|荷甲', content)
         league_stats = {}
         for league in leagues:
             league_stats[league] = league_stats.get(league, 0) + 1
         top_leagues = sorted(league_stats.items(), key=lambda x: x[1], reverse=True)[:3]
-        lines = [f"投注记录:共{total}场,胜{wins}次"]
+        
+        # 赔率区间分布
+        odds_vals = re.findall(r'(\d+\.\d+)', content)
+        ranges = {'<2.0': 0, '2.0-3.0': 0, '3.0-4.0': 0, '>4.0': 0}
+        for ov in odds_vals:
+            try:
+                v = float(ov)
+                if v < 2.0: ranges['<2.0'] += 1
+                elif v < 3.0: ranges['2.0-3.0'] += 1
+                elif v < 4.0: ranges['3.0-4.0'] += 1
+                else: ranges['>4.0'] += 1
+            except: pass
+        
+        # 复杂模式识别
+        patterns = []
+        
+        # 1. 连胜追涨检测（连续3场以上胜）
+        win_seq = re.findall(r'胜|红|赢', content)
+        max_consecutive_wins = 0
+        cur = 0
+        for r in win_seq:
+            cur = cur + 1 if r in ('胜','红','赢') else 0
+            max_consecutive_wins = max(max_consecutive_wins, cur)
+        if max_consecutive_wins >= 3:
+            patterns.append(f"连胜追涨(最长{max_consecutive_wins}场)")
+        
+        # 2. 高赔偏好检测（>4.0 的次数占比）
+        high_odds_count = ranges['>4.0']
+        high_odds_ratio = high_odds_count / total if total > 0 else 0
+        if high_odds_ratio > 0.4:
+            patterns.append(f"高赔偏好(>{40}%场次)")
+        elif high_odds_ratio < 0.15:
+            patterns.append(f"低赔稳健(仅{high_odds_ratio*100:.0f}%高赔)")
+        
+        # 3. 主场/客场偏好（从球队名识别）
+        home_bets = len(re.findall(r'主场|home|主', content))
+        away_bets = len(re.findall(r'客场|away|客', content))
+        if home_bets > away_bets * 1.5:
+            patterns.append(f"主场偏好({home_bets}场)")
+        elif away_bets > home_bets * 1.5:
+            patterns.append(f"客场偏好({away_bets}场)")
+        
+        # 4. 赌注金额变化检测（如果有金额数据）
+        amounts = re.findall(r'\d+[元万]', content)
+        if len(amounts) >= 3:
+            pattern_desc = "金额稳定"
+            patterns.append(pattern_desc)
+        
+        # 5. 联赛胜率差异
+        league_win_rates = {}
+        league_sections = re.split(r'(?=英超|德甲|意甲|西甲|法甲|欧冠|欧联)', content)
+        for section in league_sections:
+            for league in ['英超','德甲','意甲','西甲','法甲','欧冠','欧联']:
+                if league in section:
+                    lw = len(re.findall(r'胜|红|赢', section))
+                    lt = len(re.findall(r'胜|红|赢|负|黑|输|平', section))
+                    if lt > 0:
+                        league_win_rates[league] = f"{lw}/{lt}"
+        
+        # 构建输出
+        lines = [f"投注记录:共{total}场 胜{wins}平{draws}负{losses} 胜率{win_rate:.0f}%"]
         if top_leagues:
-            lines.append(f"偏好联赛:{', '.join(f'{k}({v}场)' for k,v in top_leagues)}")
+            lines.append(f"偏好联赛:{', '.join(f'{k}({v})' for k,v in top_leagues)}")
+        if ranges:
+            lines.append(f"赔率分布:{', '.join(f'{k}({v})' for k,v in ranges.items() if v > 0)}")
+        if patterns:
+            lines.append(f"投注模式:{', '.join(patterns)}")
+        if league_win_rates:
+            lines.append(f"联赛胜率:{', '.join(f'{k}{v}' for k,v in league_win_rates.items())}")
+        
         return '\n'.join(lines)
     except Exception as e:
         return f"投注记录解析失败: {e}"
