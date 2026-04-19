@@ -13,12 +13,18 @@ v3 改进（本次）：
 6. 学习反馈循环 - 置信度对比、矛盾特征标记
 7. CLI 增强 - diff / infer 命令
 
+v3.1 改进（追问功能）：
+8. 推理追问模式 - --infer --follow-up 支持推理链追踪
+9. 会话持久化 - --session-id 支持多轮对话
+
 用法：
     python3 kairos-learner.py --user jinghao
     python3 kairos-learner.py --user jinghao --dry-run
     python3 kairos-learner.py --user jinghao --compact    # 压缩旧 context
     python3 kairos-learner.py --user jinghao --feedback   # 打印学习反馈
     python3 kairos-learner.py --user jinghao --fix-dim    # 检查并修复 embedding 维度
+    python3 kairos-learner.py --user jinghao --infer "今天适合投什么比赛？"
+    python3 kairos-learner.py --user jinghao --infer "英超有什么？" --follow-up "这些比赛里哪个最稳？" --session-id <session-id>
 """
 
 import os
@@ -27,6 +33,7 @@ import json
 import argparse
 import re
 import subprocess
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -39,6 +46,41 @@ DEFAULT_API_URL = os.getenv("KAIROS_API_URL", "http://localhost:8000")
 OPENCLAW_AGENT_DIR = "/home/jinghao/.openclaw/agents/main"
 MEMORY_FILE = Path(OPENCLAW_AGENT_DIR) / "MEMORY.md"
 DAILY_MEMORY_DIR = Path(OPENCLAW_AGENT_DIR) / "memory"
+
+# ====== 推理会话存储 ======
+INFER_SESSIONS_DIR = Path("/tmp/kairos-infer-sessions")
+INFER_SESSIONS_DIR.mkdir(exist_ok=True)
+
+
+def save_infer_session(session_id: str, query: str, response: str, profile_summary: str):
+    """保存推理会话到文件"""
+    session_file = INFER_SESSIONS_DIR / f"{session_id}.json"
+    session_data = {
+        "session_id": session_id,
+        "profile_summary": profile_summary,
+        "history": []
+    }
+    if session_file.exists():
+        with open(session_file, 'r') as f:
+            session_data = json.load(f)
+    
+    session_data["history"].append({
+        "query": query,
+        "response": response,
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    with open(session_file, 'w') as f:
+        json.dump(session_data, f, ensure_ascii=False, indent=2)
+
+
+def load_infer_session(session_id: str) -> dict:
+    """加载推理会话"""
+    session_file = INFER_SESSIONS_DIR / f"{session_id}.json"
+    if session_file.exists():
+        with open(session_file, 'r') as f:
+            return json.load(f)
+    return {}
 
 
 # ==================== 特征解析与合并 ====================
@@ -458,6 +500,40 @@ ctx.readAllShared(['mentalModels', 'observations']).then(all => {
     return ""
 
 
+def learn_from_history(days: int = 7) -> str:
+    """
+    从 OpenClaw 会话历史提取用户特征
+    读取最近几天的 daily memory 文件
+    
+    Args:
+        days: 读取最近几天的记忆，默认7天
+    
+    Returns:
+        格式化的历史片段
+    """
+    memory_dir = DAILY_MEMORY_DIR
+    contents = []
+    
+    # 读最近 N 天的记忆文件
+    for i in range(days):
+        date = datetime.now() - timedelta(days=i)
+        date_str = date.strftime("%Y-%m-%d")
+        memory_file = memory_dir / f"{date_str}.md"
+        if memory_file.exists():
+            try:
+                with open(memory_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if content.strip():
+                        contents.append(f"=== {date_str} ===\n{content[:2000]}")
+            except Exception as e:
+                print(f"   ⚠️ 读取 {memory_file.name} 失败: {e}")
+    
+    if contents:
+        return "\n\n".join(contents)
+    
+    return ""
+
+
 # ==================== Hindsight Memory 集成 ====================
 
 def write_to_hindsight_memory(representation: str, confidence: float = 0.9):
@@ -525,6 +601,9 @@ def main():
     parser.add_argument("--fix-dim", action="store_true", help="检查并修复 embedding 维度错误（1536→1024）")
     parser.add_argument("--force", action="store_true", help="强制刷新 embedding 缓存")
     parser.add_argument("--infer", metavar="QUERY", help="执行推理查询，基于用户画像回答问题")
+    parser.add_argument("--follow-up", metavar="QUESTION", help="追问：在上一轮推理基础上继续追问")
+    parser.add_argument("--session-id", default=None, help="指定推理会话 ID（用于追问）")
+    parser.add_argument("--learn-from-history", action="store_true", help="从 OpenClaw 会话历史学习用户特征")
     
     args = parser.parse_args()
 
@@ -620,25 +699,65 @@ def main():
 
         # ====== 推理模式 ======
         if args.infer:
-            print(f"\n🤖 执行推理: {args.infer}")
-            # 加载画像用于上下文
+            session_id = args.session_id or f"session-{int(time.time())}"
+            
+            # 如果是追问，加载历史
+            history_context = ""
+            if args.follow_up and args.session_id:
+                prev_session = load_infer_session(args.session_id)
+                if prev_session.get("history"):
+                    history_lines = []
+                    for h in prev_session["history"]:
+                        history_lines.append(f"问: {h['query']}")
+                        history_lines.append(f"答: {h['response']}")
+                    history_context = "\n\n".join(history_lines)
+                    print(f"\n📜 加载历史推理 ({len(prev_session['history'])}轮)")
+            
+            print(f"\n🤖 执行推理: {args.follow_up or args.infer}")
+            
+            # 构建推理 prompt
             profile_summary = fm.get_summary() if fm.features else "无现有画像"
             
-            infer_prompt = f"""你是基于用户画像的推理助手。用户画像摘要：
+            if history_context:
+                prompt = f"""你是基于用户画像的推理助手。
+
+## 用户画像摘要
 {profile_summary}
 
-用户问题/需求：{args.infer}
+## 历史推理
+{history_context}
 
-请结合用户画像，给出个性化推理回答。回答要简洁、可操作。"""
+## 当前追问
+{args.follow_up or args.infer}
+
+请结合历史推理和当前追问，给出连贯的个性化回答。"""
+            else:
+                prompt = f"""你是基于用户画像的推理助手。
+
+## 用户画像摘要
+{profile_summary}
+
+## 用户问题
+{args.infer}
+
+请结合用户画像，给出个性化推理回答。"""
             
             try:
                 response = client.chat(
                     workspace.id, peer.id,
-                    infer_prompt,
+                    prompt,
                     reasoning_level="medium"
                 )
                 answer = response.get("content", "").strip()
                 print(f"\n💡 推理结果:\n{answer}")
+                
+                # 保存会话
+                save_infer_session(session_id, args.infer, answer, profile_summary)
+                
+                print(f"\n🔗 推理会话 ID: {session_id}")
+                if not args.follow_up:
+                    print(f"追问命令: python3 kairos-learner.py --user jinghao --infer '{args.infer}' --follow-up '你的追问' --session-id {session_id}")
+                
                 return 0
             except Exception as e:
                 print(f"推理失败: {e}")
@@ -660,6 +779,17 @@ def main():
             fm.update_from_text(oc_memory, source="openclaw_memory")
         else:
             print("   未找到相关记忆")
+        
+        # 从历史会话中学习（如果启用）
+        if args.learn_from_history:
+            print("\n📚 从历史会话学习...")
+            history_content = learn_from_history(days=7)
+            if history_content:
+                oc_memory += "\n\n=== 历史会话 ===\n" + history_content
+                print(f"   追加了 {len(history_content)} 字符的历史会话")
+                fm.update_from_text(history_content, source="history_sessions")
+            else:
+                print("   未找到历史会话")
         
         # 生成分析
         analysis_prompt = f"""你是一个用户画像分析专家。请从以下信息中提取和更新用户特征。
