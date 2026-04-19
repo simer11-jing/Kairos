@@ -86,14 +86,14 @@ def load_infer_session(session_id: str) -> dict:
 FEEDBACK_FILE = Path("/tmp/kairos-infer-feedback.json")
 
 
-def record_infer_feedback(session_id: str, adopted: bool, note: str = ""):
+def record_infer_feedback(session_id: str, feedback_type: str, note: str = ""):
     """
     记录用户对推理结果的采纳情况
-
+    
     Args:
         session_id: 推理会话ID
-        adopted: True=采纳, False=调整/忽略
-        note: 用户备注(如何调整的)
+        feedback_type: 'adopted'(采纳) / 'adjusted'(调整后采纳) / 'rejected'(不采纳)
+        note: 用户备注
     """
     feedback = []
     if FEEDBACK_FILE.exists():
@@ -101,30 +101,29 @@ def record_infer_feedback(session_id: str, adopted: bool, note: str = ""):
             with open(FEEDBACK_FILE, 'r') as f:
                 feedback = json.load(f)
         except: feedback = []
-
-    # 加载对应推理内容
+    
     session = load_infer_session(session_id)
-    last_query = ""
-    last_response = ""
+    last_query = last_response = ""
     if session and session.get("history"):
         last = session["history"][-1]
         last_query = last.get("query", "")[:200]
         last_response = last.get("response", "")[:500]
-
+    
     feedback.append({
         "session_id": session_id,
-        "adopted": adopted,
+        "feedback_type": feedback_type,
+        "adopted": feedback_type in ("adopted", "adjusted"),
         "note": note,
         "query": last_query,
         "response_summary": last_response[:100],
         "timestamp": datetime.now().isoformat()
     })
-
+    
     with open(FEEDBACK_FILE, 'w') as f:
         json.dump(feedback, f, ensure_ascii=False, indent=2)
-
-    # 如果不采纳,写入共享记忆供下次改进
-    if not adopted and note:
+    
+    # 不采纳时写入共享记忆供下次改进
+    if feedback_type == "rejected" and note:
         try:
             sys.path.insert(0, str(Path(__file__).parent))
             from kairos_learner import write_to_hindsight_memory
@@ -133,10 +132,9 @@ def record_infer_feedback(session_id: str, adopted: bool, note: str = ""):
                 confidence=0.8
             )
         except: pass
-
-    adopted_count = sum(1 for f in feedback if f.get("adopted"))
-    total = len(feedback)
-    print(f"✅ 反馈已记录: {'采纳' if adopted else '调整'} | 总计 {adopted_count}/{total} 采纳率")
+    
+    stats = get_feedback_stats()
+    print(f"✅ 反馈已记录: {feedback_type} | {stats}")
 
 
 def get_feedback_stats():
@@ -706,7 +704,7 @@ def main():
     parser.add_argument("--session-id", default=None, help="指定推理会话 ID(用于追问)")
     parser.add_argument("--learn-from-history", action="store_true", help="从 OpenClaw 会话历史学习用户特征")
     parser.add_argument("--learn-from-betting", action="store_true", help="从投注记录学习用户特征")
-    parser.add_argument("--record-feedback", metavar="SESSION_ID:ADOPTED", help="记录用户对推理结果的采纳情况,格式: sessionId:adopted(bool)")
+    parser.add_argument("--record-feedback", metavar="SESSION_ID:TYPE[:NOTE]", help="记录推理采纳: sessionId:adopted|adjusted|rejected[:备注]")
 
     args = parser.parse_args()
 
@@ -799,26 +797,35 @@ def main():
                 if items:
                     print(f"     {cat}: {len(items)}个")
             return 0
-        
+
         # ====== 采纳反馈记录 ======
         if args.record_feedback:
             try:
                 parts = args.record_feedback.split(":", 1)
                 session_id = parts[0]
-                adopted_str = parts[1] if len(parts) > 1 else ""
-                adopted = adopted_str.lower() not in ("false", "0", "no", "ignore")
+                feedback_type = parts[1] if len(parts) > 1 else ""
                 note = ""
-                if ":" in args.record_feedback:
-                    note = args.record_feedback.split(":", 1)[1]
-                record_infer_feedback(session_id, adopted, note)
+                if len(parts) > 2:
+                    note = parts[2]  # sessionId:adopted:note
+                elif len(parts) > 1 and ":" in parts[1]:
+                    ft_and_note = parts[1].split(":", 1)
+                    feedback_type = ft_and_note[0]
+                    note = ft_and_note[1]
+                if feedback_type not in ("adopted", "adjusted", "rejected"):
+                    print(f"❌ 无效类型: {feedback_type}")
+                    return 1
+                record_infer_feedback(session_id, feedback_type, note)
                 return 0
             except Exception as e:
                 print(f"❌ 反馈记录失败: {e}")
-                print("用法: --record-feedback sessionId:adopted[:note]")
+                print("用法: --record-feedback sessionId:adopted|adjusted|rejected[:备注]")
+                print("  例如: --record-feedback infer-20260420-123456:adopted")
+                print("  例如: --record-feedback infer-20260420-123456:adjusted:调整了赔率区间")
+                print("  例如: --record-feedback infer-20260420-123456:rejected:战意判断错误")
                 print("  例如: --record-feedback session-123:true")
                 print("  例如: --record-feedback session-123:false:调整了赔率区间")
                 return 1
-        
+
         # ====== 推理模式 ======
         if args.infer:
             session_id = args.session_id or f"session-{int(time.time())}"
