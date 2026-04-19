@@ -746,7 +746,8 @@ def main():
                 response = client.chat(
                     workspace.id, peer.id,
                     prompt,
-                    reasoning_level="medium"
+                    reasoning_level="medium",
+                    model="glm-5.0"  # 走 NewAPI，绕过 Kairos Docker
                 )
                 answer = response.get("content", "").strip()
                 print(f"\n💡 推理结果:\n{answer}")

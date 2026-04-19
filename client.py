@@ -356,7 +356,8 @@ class KairosClient:
         session_id: Optional[str] = None,
         target: Optional[str] = None,
         reasoning_level: str = "low",
-        stream: bool = False
+        stream: bool = False,
+        model: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         发送查询并获取 AI 回复
@@ -369,10 +370,15 @@ class KairosClient:
             target: 目标 Peer ID（可选）
             reasoning_level: 推理级别 (minimal/low/medium/high/max)
             stream: 是否流式返回
+            model: 可选，直接指定模型（如 "glm-5.0"，走 NewAPI 直连）
 
         Returns:
             包含回复和元数据的字典
         """
+        # 如果指定了 model，走 NewAPI 直连（绕过 Kairos Docker）
+        if model:
+            return self._direct_chat(query, model=model, reasoning_level=reasoning_level)
+
         body = {
             "query": query,
             "reasoning_level": reasoning_level,
@@ -389,6 +395,43 @@ class KairosClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def _direct_chat(self, query: str, model: str = "glm-5.0", reasoning_level: str = "medium") -> Dict[str, Any]:
+        """直连 NewAPI，不走 Kairos Docker"""
+        import requests
+        
+        newapi_base = os.getenv("NEWAPI_BASE_URL", "http://192.168.50.2:3000/v1")
+        newapi_key = os.getenv("NEWAPI_KEY", "sk-tOEDv0IeZbH2Xm7egaKhDeFc8LrsPQtRll6BY5PLYiXBB3Hy")
+        
+        headers = {
+            "Authorization": f"Bearer {newapi_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # reasoning_level → model 映射
+        reasoner_models = {"glm-5.0", "glm-5.1", "glm-4.7", "gemini-3.1-pro", "gpt-5.3-codex", "z-ai/glm5", "glm-5"}
+        
+        # 对于推理要求高的场景，追加思考内容
+        if reasoning_level in ("medium", "high", "max"):
+            query = f"请进行深入推理后回答：{query}"
+        
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": query}],
+            "temperature": 0.7 if reasoning_level == "low" else 0.3
+        }
+        
+        resp = requests.post(
+            f"{newapi_base}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        
+        content = data["choices"][0]["message"]["content"]
+        return {"content": content}
 
     # ==================== 用户建模 ====================
 
