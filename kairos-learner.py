@@ -43,7 +43,7 @@ from client import KairosClient
 
 DEFAULT_WORKSPACE = os.getenv("KAIROS_WORKSPACE", "openclaw-main")
 DEFAULT_API_URL = os.getenv("KAIROS_API_URL", "http://localhost:8000")
-OPENCLAW_AGENT_DIR = "/home/jinghao/.openclaw/agents/main"
+OPENCLAW_AGENT_DIR = Path(os.path.expanduser('~/.openclaw/agents/main'))
 MEMORY_FILE = Path(OPENCLAW_AGENT_DIR) / "MEMORY.md"
 DAILY_MEMORY_DIR = Path(OPENCLAW_AGENT_DIR) / "memory"
 
@@ -551,7 +551,7 @@ def read_hindsight_memory(limit: int = 5) -> str:
     try:
         result = subprocess.run(
             ['node', '-e', '''
-const {AgentContext} = require('/home/jinghao/.openclaw/skills/hindsight-memory/lib/multi-agent/index.js');
+const {AgentContext} = require(os.path.expanduser('~/.openclaw/skills/hindsight-memory/lib/multi-agent/index.js'));
 const ctx = new AgentContext('kairos');
 ctx.readAllShared(['mentalModels', 'observations']).then(all => {
     const lines = [];
@@ -563,7 +563,7 @@ ctx.readAllShared(['mentalModels', 'observations']).then(all => {
     console.log(lines.length > 0 ? lines.join('\\n') : '');
 });
 '''],
-            capture_output=True, text=True, cwd='/home/jinghao', timeout=15
+            capture_output=True, text=True, cwd=os.path.expanduser('~'), timeout=15
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -722,7 +722,7 @@ def write_to_hindsight_memory(representation: str, confidence: float = 0.9):
         bool: 是否成功写入
     """
     try:
-        hindsight_path = '/home/jinghao/.openclaw/skills/hindsight-memory/lib/multi-agent/index.js'
+        hindsight_path = os.path.expanduser('~/.openclaw/skills/hindsight-memory/lib/multi-agent/index.js')
 
         # 使用 JSON.stringify 避免 Shell 注入
         escaped_content = json.dumps(representation.replace('"', '\\"'))
@@ -743,7 +743,7 @@ new AgentContext('kairos').writeShared('mentalModels', content, {{
             ['node', '-e', node_script],
             capture_output=True,
             text=True,
-            cwd='/home/jinghao',
+            cwd=os.path.expanduser('~'),
             timeout=30
         )
 
