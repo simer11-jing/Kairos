@@ -9,7 +9,6 @@ import os
 import json
 import time
 import hashlib
-import threading
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
@@ -50,11 +49,6 @@ class KairosClient:
     EMBEDDING_TTL = 24 * 3600  # 24小时缓存
     EMBEDDING_CACHE_PATH = Path("/tmp/kairos_embedding_cache.json")
 
-    # ==================== 限流配置 ====================
-    MAX_CONCURRENT_REQUESTS = 3  # 最大并发
-    MIN_REQUEST_INTERVAL = 0.5  # 最小请求间隔（秒）
-    MAX_RETRIES = 3  # 429 重试次数
-
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -66,17 +60,12 @@ class KairosClient:
         self.timeout = timeout
         self._client = httpx.Client(base_url=self.base_url, timeout=timeout)
 
-        # Embedding API 配置（SiliconFlow）
+        # Embedding API 配置（SiliconFlow BAAI/bge-m3, 免费无限制）
         self._embedding_api_key = embedding_api_key or os.getenv("SILICONFLOW_API_KEY", "")
         self._embedding_api_url = embedding_api_url or "https://api.siliconflow.cn/v1/embeddings"
 
-        # Embedding 缓存
+        # Embedding 缓存（24h TTL）
         self._embedding_cache = self._load_embedding_cache()
-
-        # 限流机制
-        self._request_semaphore = threading.Semaphore(self.MAX_CONCURRENT_REQUESTS)
-        self._last_request_time = 0.0
-        self._request_lock = threading.Lock()
 
     # ==================== Embedding 缓存管理 ====================
 
@@ -139,35 +128,9 @@ class KairosClient:
         print(f"  🆕 embedding 已缓存 ({len(embedding)}维)")
         return embedding
 
-    def _fetch_embedding_with_retry(self, text: str) -> List[float]:
-        """
-        带重试的 embedding 请求
-
-        处理 429 限速，指数退避重试
-        """
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                embedding = self._fetch_embedding_protected(text)
-                return embedding
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    wait = (2 ** attempt) * 1.0  # 1s, 2s, 4s 指数退避
-                    print(f"  ⚠️ API 限速，等待 {wait}s 重试 ({attempt+1}/{self.MAX_RETRIES})")
-                    time.sleep(wait)
-                    continue
-                raise
-        raise RuntimeError(f"Embedding 请求失败，{self.MAX_RETRIES} 次重试后仍 429")
-
-    def _fetch_embedding_protected(self, text: str) -> List[float]:
-        """带限流保护的 embedding 请求"""
-        with self._request_semaphore:
-            self._rate_limit_wait()
-            return self._fetch_embedding(text)
-
     def _fetch_embedding(self, text: str) -> List[float]:
-        """请求 SiliconFlow embedding API"""
+        """请求 SiliconFlow embedding API（BAAI/bge-m3, 免费无限制）"""
         if not self._embedding_api_key:
-            # 没有配置 API key，返回空向量
             print("  ⚠️ 未配置 SILICONFLOW_API_KEY，返回空 embedding")
             return [0.0] * 1024
 
@@ -177,7 +140,7 @@ class KairosClient:
         }
 
         body = {
-            "model": "BAAI/bge-large-zh-v1.5",  # SiliconFlow embedding model
+            "model": "BAAI/bge-m3",  # SiliconFlow embedding model（1024维，免费）
             "input": text,
             "encoding_format": "float",
         }
@@ -196,45 +159,6 @@ class KairosClient:
         if embeddings and len(embeddings) > 0:
             return embeddings[0].get("embedding", [])
         return []
-
-    # ==================== 请求限流保护 ====================
-
-    def _rate_limit_wait(self):
-        """限流等待 - 确保请求间隔"""
-        with self._request_lock:
-            now = time.time()
-            elapsed = now - self._last_request_time
-            if elapsed < self.MIN_REQUEST_INTERVAL:
-                wait = self.MIN_REQUEST_INTERVAL - elapsed
-                time.sleep(wait)
-            self._last_request_time = time.time()
-
-    def _protected_request(self, method: str, url: str, **kwargs) -> httpx.Response:
-        """
-        带限流和重试保护的通用请求
-
-        Args:
-            method: HTTP 方法
-            url: URL（相对于 base_url）
-            **kwargs: httpx 请求参数
-
-        Returns:
-            httpx.Response
-        """
-        for attempt in range(self.MAX_RETRIES):
-            with self._request_semaphore:
-                self._rate_limit_wait()
-                try:
-                    response = self._client.request(method, url, **kwargs)
-                    return response
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 429:
-                        wait = (2 ** attempt) * 1.0
-                        print(f"  ⚠️ API 限速，等待 {wait}s 重试 ({attempt+1}/{self.MAX_RETRIES})")
-                        time.sleep(wait)
-                        continue
-                    raise
-        raise RuntimeError(f"请求失败，{self.MAX_RETRIES} 次重试后仍 429")
 
     def __enter__(self):
         return self
