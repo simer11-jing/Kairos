@@ -524,6 +524,7 @@ def main():
     parser.add_argument("--feedback", action="store_true", help="仅打印学习反馈，不写入")
     parser.add_argument("--fix-dim", action="store_true", help="检查并修复 embedding 维度错误（1536→1024）")
     parser.add_argument("--force", action="store_true", help="强制刷新 embedding 缓存")
+    parser.add_argument("--infer", metavar="QUERY", help="执行推理查询，基于用户画像回答问题")
     
     args = parser.parse_args()
 
@@ -616,7 +617,33 @@ def main():
                 if items:
                     print(f"     {cat}: {len(items)}个")
             return 0
-        
+
+        # ====== 推理模式 ======
+        if args.infer:
+            print(f"\n🤖 执行推理: {args.infer}")
+            # 加载画像用于上下文
+            profile_summary = fm.get_summary() if fm.features else "无现有画像"
+            
+            infer_prompt = f"""你是基于用户画像的推理助手。用户画像摘要：
+{profile_summary}
+
+用户问题/需求：{args.infer}
+
+请结合用户画像，给出个性化推理回答。回答要简洁、可操作。"""
+            
+            try:
+                response = client.chat(
+                    workspace.id, peer.id,
+                    infer_prompt,
+                    reasoning_level="medium"
+                )
+                answer = response.get("content", "").strip()
+                print(f"\n💡 推理结果:\n{answer}")
+                return 0
+            except Exception as e:
+                print(f"推理失败: {e}")
+                return 1
+
         # ====== 正常学习流程 ======
         print("\n📖 读取 OpenClaw 记忆...")
         # 1. 先从 hindsight-memory 共享层读取相关历史经验
