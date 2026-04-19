@@ -60,9 +60,10 @@ class KairosClient:
         self.timeout = timeout
         self._client = httpx.Client(base_url=self.base_url, timeout=timeout)
 
-        # Embedding API 配置（SiliconFlow BAAI/bge-m3, 免费无限制）
+        # Embedding API 配置（SiliconFlow，支持多模型）
         self._embedding_api_key = embedding_api_key or os.getenv("SILICONFLOW_API_KEY", "")
-        self._embedding_api_url = embedding_api_url or "https://api.siliconflow.cn/v1/embeddings"
+        self._embedding_api_url = embedding_api_url or os.getenv("SILICONFLOW_EMBEDDING_URL", "https://api.siliconflow.cn/v1/embeddings")
+        self._embedding_model = os.getenv("SILICONFLOW_EMBEDDING_MODEL", "BAAI/bge-m3")  # 可配置：BAAI/bge-m3, BAAI/bge-large-zh-v1.5等
 
         # Embedding 缓存（24h TTL）
         self._embedding_cache = self._load_embedding_cache()
@@ -140,7 +141,7 @@ class KairosClient:
         }
 
         body = {
-            "model": "BAAI/bge-m3",  # SiliconFlow embedding model（1024维，免费）
+            "model": self._embedding_model,  # 可配置，默认 BAAI/bge-m3
             "input": text,
             "encoding_format": "float",
         }
