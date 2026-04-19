@@ -98,6 +98,67 @@ context = client.get_context(workspace.id, user_peer.id)
 3. **会话管理**: 每个会话应该是独立的对话线程
 4. **异步处理**: 某些操作（如 Deriver 推理）是异步的
 
+## 新增功能 (v3)
+
+### 竞彩分析增强
+
+**高级投注模式识别**
+- 连胜/连负序列识别
+- 高赔偏好检测
+- 主客场偏差分析
+- 联赛胜率差异计算
+
+**从投注历史学习**
+- 自动读取 `betting-results.md`
+- 统计联赛偏好
+- 分析赔率区间分布
+- 计算胜率趋势
+
+### 推理系统优化
+
+**三态反馈机制**
+- `session_id` 追踪
+- 三态反馈：adopted / adjusted / rejected
+- 支持推理结果修正
+
+**追问链支持**
+- `--infer --follow-up` 启动追问链
+- Session 持久化
+- 上下文自动传递
+
+**直接 NewAPI 调用**
+- 模型：`glm-5.0`
+- 超时：120秒
+- 绕过中间层，直接推理
+
+### 记忆系统增强
+
+**历史学习**
+- `--learn-from-history` 自动学习
+- 读取最近7天 memory 文件
+- 跨时间窗口特征聚合
+
+**团队经验共享**
+- 推理前自动读取 hindsight-memory 共享层
+- 融入团队经验
+- 避免重复犯错
+
+### 技术优化
+
+**可配置 Embedding 模型**
+- 环境变量：`SILICONFLOW_EMBEDDING_MODEL`
+- 支持切换不同模型
+
+**Embedding 缓存**
+- TTL：24小时
+- 并发控制：3个请求
+- 429错误自动重试
+- 维度自校验
+
+**路径修复**
+- 硬编码路径 → `os.path.expanduser('~/.openclaw/...')`
+- 跨环境兼容性增强
+
 ## 参考文档
 
 - Kairos GitHub: https://github.com/plastic-labs/honcho
