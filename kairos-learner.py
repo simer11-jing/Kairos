@@ -25,6 +25,7 @@ import sys
 import json
 import argparse
 import re
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -430,6 +431,86 @@ def read_openclaw_memory() -> str:
     return '\n'.join(contents) if contents else ''
 
 
+def read_hindsight_memory(limit: int = 5) -> str:
+    """从 hindsight-memory 共享层读取最近的相关经验"""
+    try:
+        result = subprocess.run(
+            ['node', '-e', '''
+const {AgentContext} = require('/home/jinghao/.openclaw/skills/hindsight-memory/lib/multi-agent/index.js');
+const ctx = new AgentContext('kairos');
+ctx.readAllShared(['mentalModels', 'observations']).then(all => {
+    const lines = [];
+    for (const layer of ['mentalModels', 'observations']) {
+        for (const e of (all[layer] || []).slice(0, 3)) {
+            lines.push(`[${layer}] ${e.content}`);
+        }
+    }
+    console.log(lines.length > 0 ? lines.join('\\n') : '');
+});
+'''],
+            capture_output=True, text=True, cwd='/home/jinghao', timeout=15
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception as e:
+        print(f"   ⚠️ 读取共享记忆失败: {e}")
+    return ""
+
+
+# ==================== Hindsight Memory 集成 ====================
+
+def write_to_hindsight_memory(representation: str, confidence: float = 0.9):
+    """
+    将 Kairos 推理结果写入 hindsight-memory 共享记忆层
+    
+    Args:
+        representation: Kairos 生成的用户画像
+        confidence: 置信度，默认 0.9
+
+    Returns:
+        bool: 是否成功写入
+    """
+    try:
+        hindsight_path = '/home/jinghao/.openclaw/skills/hindsight-memory/lib/multi-agent/index.js'
+        
+        # 使用 JSON.stringify 避免 Shell 注入
+        escaped_content = json.dumps(representation.replace('"', '\\"'))
+        
+        node_script = f"""
+const {{AgentContext}} = require('{hindsight_path}');
+const content = {escaped_content};
+new AgentContext('kairos').writeShared('mentalModels', content, {{
+    confidence: {confidence},
+    tags: ['kairos', 'user-profile']
+}}).then(r => console.log('记忆已写入:', r.agent)).catch(e => {{
+    console.error('记忆写入失败:', e.message);
+    process.exit(1);
+}});
+"""
+        
+        result = subprocess.run(
+            ['node', '-e', node_script],
+            capture_output=True,
+            text=True,
+            cwd='/home/jinghao',
+            timeout=30
+        )
+        
+        if result.returncode == 0:
+            print(f"✅ Hindsight 记忆已更新: {result.stdout.strip()}")
+            return True
+        else:
+            print(f"⚠️ Hindsight 记忆写入失败: {result.stderr.strip()}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("⚠️ Hindsight 记忆写入超时")
+        return False
+    except Exception as e:
+        print(f"⚠️ Hindsight 记忆写入异常: {e}")
+        return False
+
+
 # ==================== 主逻辑 ====================
 
 def main():
@@ -522,6 +603,14 @@ def main():
         
         # ====== 正常学习流程 ======
         print("\n📖 读取 OpenClaw 记忆...")
+        # 1. 先从 hindsight-memory 共享层读取相关历史经验
+        shared_history = read_hindsight_memory()
+        if shared_history:
+            print(f"   获取到共享层 {len(shared_history)} 条相关经验")
+            fm.update_from_text(shared_history, source="shared_memory")
+        else:
+            print("   共享层暂无相关经验")
+        
         oc_memory = read_openclaw_memory()
         if oc_memory:
             print(f"   获取到 {len(oc_memory)} 字符记忆内容")
@@ -595,6 +684,9 @@ OpenClaw 记忆片段：
                 )
                 total = sum(len(fm.features[c]) for c in fm.features)
                 print(f"\n✅ 用户画像已更新 ({total}个特征)")
+                
+                # 写入 hindsight-memory 共享记忆层
+                write_to_hindsight_memory(final_representation, confidence=0.9)
                 
                 # 学习反馈
                 print("\n📊 本次学习反馈:")
