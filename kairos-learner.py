@@ -18,6 +18,7 @@ v3 改进（本次）：
     python3 kairos-learner.py --user jinghao --dry-run
     python3 kairos-learner.py --user jinghao --compact    # 压缩旧 context
     python3 kairos-learner.py --user jinghao --feedback   # 打印学习反馈
+    python3 kairos-learner.py --user jinghao --fix-dim    # 检查并修复 embedding 维度
 """
 
 import os
@@ -521,6 +522,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅打印结果，不写入")
     parser.add_argument("--compact", action="store_true", help="压缩旧 context，生成摘要")
     parser.add_argument("--feedback", action="store_true", help="仅打印学习反馈，不写入")
+    parser.add_argument("--fix-dim", action="store_true", help="检查并修复 embedding 维度错误（1536→1024）")
+    parser.add_argument("--force", action="store_true", help="强制刷新 embedding 缓存")
     
     args = parser.parse_args()
 
@@ -532,7 +535,10 @@ def main():
         print("⚠️ DRY-RUN 模式，不写入数据")
     print()
 
-    with KairosClient(args.api_url) as client:
+    # 支持 SiliconFlow API key（用于 embedding 缓存）
+    embedding_api_key = os.getenv("SILICONFLOW_API_KEY", "")
+    
+    with KairosClient(args.api_url, embedding_api_key=embedding_api_key) as client:
         if not client.health_check():
             print("❌ Kairos 服务不可用")
             return 1
@@ -574,6 +580,16 @@ def main():
                     print(f"\n⚠️ 写入失败: {e}")
             return 0
         
+        # --fix-dim 单独处理：只做维度修复，不走学习流程
+        if args.fix_dim:
+            print("\n🔧 检查 embedding 维度...")
+            if client.health_check(fix_embedding_dim=True):
+                print("✅ 维度检查完成")
+            else:
+                print("❌ Kairos 服务不可用")
+                return 1
+            return 0
+
         # ====== 反馈模式 ======
         if args.feedback:
             print("\n📊 学习反馈报告:")
